@@ -322,10 +322,9 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
   unique_id = 1000000000
 
   for (example_index, example) in enumerate(examples):
-    query_tokens = ["CLS"]
+    query_tokens = ["[CLS]"]
     query_tokens.extend(tokenizer.tokenize(example.question_text))
     query_tokens.append("[SEP]")
-    query_segment_ids = [0] * len(query_tokens)
 
     if len(query_tokens) > max_query_length:
       query_tokens = query_tokens[0:max_query_length]
@@ -409,24 +408,18 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
       doc_input_mask = [1] * len(doc_input_ids)
       query_input_mask = [1] * len(query_input_ids)
 
+      query_segment_ids = [0] * len(query_input_ids)
+
 
       # Zero-pad up to the sequence length.
       while len(doc_input_ids) < max_seq_length:
         doc_input_ids.append(0)
         doc_input_mask.append(0)
         doc_segment_ids.append(0)
-      wile len(query_input_ids) < max_seq_length:
+      while len(query_input_ids) < max_seq_length:
         query_input_ids.append(0)
         query_input_mask.append(0)
         query_segment_ids.append(0)
-
-      assert len(doc_input_ids) == max_seq_length
-      assert len(doc_input_mask) == max_seq_length
-      assert len(doc_segment_ids) == max_seq_length
-      assert len(query_input_ids) == max_seq_length
-      assert len(query_input_mask) == max_seq_length
-      assert len(query_segment_ids) == max_seq_length
-
 
       start_position = None
       end_position = None
@@ -442,7 +435,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
           start_position = 0
           end_position = 0
         else:
-          doc_offset = 0 # len(query_tokens) + 2
+          doc_offset = 1 # len(query_tokens) + 2
           start_position = tok_start_position - doc_start + doc_offset
           end_position = tok_end_position - doc_start + doc_offset
 
@@ -450,7 +443,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         start_position = 0
         end_position = 0
 
-      if example_index < 3:
+      if example_index < 10:
         tf.logging.info("*** Example ***")
         tf.logging.info("unique_id: %s" % (unique_id))
         tf.logging.info("example_index: %s" % (example_index))
@@ -464,26 +457,29 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         tf.logging.info("token_is_max_context: %s" % " ".join([
             "%d:%s" % (x, y) for (x, y) in six.iteritems(token_is_max_context)
         ]))
-        tf.logging.info("doc_input_ids: %s" % " ".join([str(x) for x in doc input_ids]))
-        tf.logging.info(read_squad_examples
-            "doc_input_mask: %s" % " ".join([str(x) for x in doc_input_mask]))
-        tf.logging.info(
-            "doc_segment_ids: %s" % " ".join([str(x) for x in doc_segment_ids]))
+        tf.logging.info("doc_input_ids: %s" % " ".join([str(x) for x in doc_input_ids]))
+        tf.logging.info("doc_input_mask: %s" % " ".join([str(x) for x in doc_input_mask]))
+        tf.logging.info("doc_segment_ids: %s" % " ".join([str(x) for x in doc_segment_ids]))
         
         tf.logging.info("query_input_ids: %s" % " ".join([str(x) for x in query_input_ids]))
-        tf.logging.info(read_squad_examples
-            "query_input_mask: %s" % " ".join([str(x) for x in query_input_mask]))
-        tf.logging.info(
-            "query_segment_ids: %s" % " ".join([str(x) for x in query_segment_ids]))
+        tf.logging.info("query_input_mask: %s" % " ".join([str(x) for x in query_input_mask]))
+        tf.logging.info("query_segment_ids: %s" % " ".join([str(x) for x in query_segment_ids]))
 
         if is_training and example.is_impossible:
           tf.logging.info("impossible example")
         if is_training and not example.is_impossible:
-          answer_text = " ".join(tokens[start_position:(end_position + 1)])
+          answer_text = " ".join(doc_tokens[start_position:(end_position + 1)])
           tf.logging.info("start_position: %d" % (start_position))
           tf.logging.info("end_position: %d" % (end_position))
           tf.logging.info(
               "answer: %s" % (tokenization.printable_text(answer_text)))
+
+      assert len(doc_input_ids) == max_seq_length
+      assert len(doc_input_mask) == max_seq_length
+      assert len(doc_segment_ids) == max_seq_length
+      assert len(query_input_ids) == max_seq_length
+      assert len(query_input_mask) == max_seq_length
+      assert len(query_segment_ids) == max_seq_length
 
       feature = InputFeatures(
           unique_id=unique_id,
@@ -597,9 +593,9 @@ def create_model(bert_config, is_training, doc_input_ids,
       use_one_hot_embeddings=use_one_hot_embeddings)
 
   model_query = modeling.BertModel(
-      config=config,
+      config=bert_config,
       is_training=is_training,
-      input_id=query_input_ids,
+      input_ids=query_input_ids,
       input_mask=query_input_mask,
       token_type_ids=query_segment_ids,
       use_one_hot_embeddings=use_one_hot_embeddings)
@@ -619,8 +615,8 @@ def create_model(bert_config, is_training, doc_input_ids,
   output_bias = tf.get_variable(
       "cls/squad/output_bias", [2], initializer=tf.zeros_initializer())
 
-  doc_hidden_matrix = tf.reshape(doc_final_hidden,
-                                   [batch_size * seq_length, hidden_size])
+  #doc_hidden_matrix = tf.reshape(doc_final_hidden,
+  #                                 [batch_size * seq_length, hidden_size])
   #need only representation of [CLS] token of query
   #this is size [batch_size, 1, hidden_size]
   query_rep = model_query.get_sequence_output()[:, 0:1, :]
@@ -628,8 +624,8 @@ def create_model(bert_config, is_training, doc_input_ids,
   tiled_query_rep = tf.tile(query_rep, [1, seq_length, 1])
   
   #shape is [batch_size, seq_length, 2*hidden_size]
-  final_hidden_matrix = tf.concatenate([doc_hidden_matrix, tiled_query_rep], \
-                                      axis=2)
+  final_hidden_matrix = tf.reshape(tf.concat([doc_final_hidden, tiled_query_rep], \
+                                      axis=2), [batch_size * seq_length, 2* hidden_size])
 
   logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
   logits = tf.nn.bias_add(logits, output_bias)
@@ -985,7 +981,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
   with tf.gfile.GFile(output_nbest_file, "w") as writer:
     writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
 
-  if FLAGS.version_2_with_negative:example_index
+  if FLAGS.version_2_with_negative:
     with tf.gfile.GFile(output_null_log_odds_file, "w") as writer:
       writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
 
