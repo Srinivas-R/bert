@@ -118,4 +118,4 @@ dmypy.json
 #data and checkpoints
 data
 models
-output
+outputs
