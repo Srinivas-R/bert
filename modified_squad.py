@@ -607,14 +607,6 @@ def create_model(bert_config, is_training, doc_input_ids,
   seq_length = doc_hidden_shape[1]
   hidden_size = doc_hidden_shape[2]
 
-  
-  output_weights = tf.get_variable(
-      "cls/squad/output_weights", [2, 2 * hidden_size],
-      initializer=tf.truncated_normal_initializer(stddev=0.02))
-
-  output_bias = tf.get_variable(
-      "cls/squad/output_bias", [2], initializer=tf.zeros_initializer())
-
   #doc_hidden_matrix = tf.reshape(doc_final_hidden,
   #                                 [batch_size * seq_length, hidden_size])
   #need only representation of [CLS] token of query
@@ -626,6 +618,16 @@ def create_model(bert_config, is_training, doc_input_ids,
   #shape is [batch_size, seq_length, 2*hidden_size]
   final_hidden_matrix = tf.reshape(tf.concat([doc_final_hidden, tiled_query_rep], \
                                       axis=2), [batch_size * seq_length, 2* hidden_size])
+
+  # output_weights = tf.get_variable(
+  #     "cls/squad/output_weights", [2, 2 * hidden_size],
+  #     initializer=tf.truncated_normal_initializer(stddev=0.02))
+
+  # output_bias = tf.get_variable(
+  #     "cls/squad/output_bias", [2], initializer=tf.zeros_initializer())
+
+  start_h1 = tf.layers.Dense()
+
 
   logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
   logits = tf.nn.bias_add(logits, output_bias)
@@ -849,9 +851,9 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
           # We could hypothetically create invalid predictions, e.g., predict
           # that the start of the span is in the question. We throw out all
           # invalid predictions.
-          if start_index >= len(feature.tokens):
+          if start_index >= len(feature.doc_tokens):
             continue
-          if end_index >= len(feature.tokens):
+          if end_index >= len(feature.doc_tokens):
             continue
           if start_index not in feature.token_to_orig_map:
             continue
@@ -895,7 +897,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         break
       feature = features[pred.feature_index]
       if pred.start_index > 0:  # this is a non-null prediction
-        tok_tokens = feature.tokens[pred.start_index:(pred.end_index + 1)]
+        tok_tokens = feature.doc_tokens[pred.start_index:(pred.end_index + 1)]
         orig_doc_start = feature.token_to_orig_map[pred.start_index]
         orig_doc_end = feature.token_to_orig_map[pred.end_index]
         orig_tokens = example.doc_tokens[orig_doc_start:(orig_doc_end + 1)]
