@@ -121,10 +121,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     input_ids = features["input_ids"]
     input_mask = features["input_mask"]
     segment_ids = features["segment_ids"]
-    masked_lm_positions = features["masked_lm_positions"]
-    masked_lm_ids = features["masked_lm_ids"]
-    masked_lm_weights = features["masked_lm_weights"]
-    next_sentence_labels = features["next_sentence_labels"]
+    ordering_labels = features["ordering_labels"]
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
@@ -136,16 +133,21 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         token_type_ids=segment_ids,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
-    (masked_lm_loss,
-     masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
-         bert_config, model.get_sequence_output(), model.get_embedding_table(),
-         masked_lm_positions, masked_lm_ids, masked_lm_weights)
+    # (masked_lm_loss,
+    #  masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
+    #      bert_config, model.get_sequence_output(), model.get_embedding_table(),
+    #      masked_lm_positions, masked_lm_ids, masked_lm_weights)
 
-    (next_sentence_loss, next_sentence_example_loss,
-     next_sentence_log_probs) = get_next_sentence_output(
-         bert_config, model.get_pooled_output(), next_sentence_labels)
+    # (next_sentence_loss, next_sentence_example_loss,
+    #  next_sentence_log_probs) = get_next_sentence_output(
+    #      bert_config, model.get_pooled_output(), next_sentence_labels)
+    
+    (ordering_loss, ordering_example_loss) = get_ordering_output(
+      bert_config, model.get_pooled_output(), ordering_labels)
 
-    total_loss = masked_lm_loss + next_sentence_loss
+
+    # total_loss = masked_lm_loss + next_sentence_loss + ordering_loss
+    total_loss = ordering_loss
 
     tvars = tf.trainable_variables()
 
@@ -184,39 +186,13 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           scaffold_fn=scaffold_fn)
     elif mode == tf.estimator.ModeKeys.EVAL:
 
-      def metric_fn(masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
-                    masked_lm_weights, next_sentence_example_loss,
-                    next_sentence_log_probs, next_sentence_labels):
-        """Computes the loss and accuracy of the model."""
-        masked_lm_log_probs = tf.reshape(masked_lm_log_probs,
-                                         [-1, masked_lm_log_probs.shape[-1]])
-        masked_lm_predictions = tf.argmax(
-            masked_lm_log_probs, axis=-1, output_type=tf.int32)
-        masked_lm_example_loss = tf.reshape(masked_lm_example_loss, [-1])
-        masked_lm_ids = tf.reshape(masked_lm_ids, [-1])
-        masked_lm_weights = tf.reshape(masked_lm_weights, [-1])
-        masked_lm_accuracy = tf.metrics.accuracy(
-            labels=masked_lm_ids,
-            predictions=masked_lm_predictions,
-            weights=masked_lm_weights)
-        masked_lm_mean_loss = tf.metrics.mean(
-            values=masked_lm_example_loss, weights=masked_lm_weights)
-
-        next_sentence_log_probs = tf.reshape(
-            next_sentence_log_probs, [-1, next_sentence_log_probs.shape[-1]])
-        next_sentence_predictions = tf.argmax(
-            next_sentence_log_probs, axis=-1, output_type=tf.int32)
-        next_sentence_labels = tf.reshape(next_sentence_labels, [-1])
-        next_sentence_accuracy = tf.metrics.accuracy(
-            labels=next_sentence_labels, predictions=next_sentence_predictions)
-        next_sentence_mean_loss = tf.metrics.mean(
-            values=next_sentence_example_loss)
+      def metric_fn(ordering_example_loss, ordering_loss, ordering_labels):
+        for example in ordering_labels:
+          
 
         return {
-            "masked_lm_accuracy": masked_lm_accuracy,
-            "masked_lm_loss": masked_lm_mean_loss,
-            "next_sentence_accuracy": next_sentence_accuracy,
-            "next_sentence_loss": next_sentence_mean_loss,
+            "ordering_accuracy": ordering_accuracy,
+            "ordering_loss": ordering_loss,
         }
 
       eval_metrics = (metric_fn, [
@@ -304,6 +280,25 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
     loss = tf.reduce_mean(per_example_loss)
     return (loss, per_example_loss, log_probs)
 
+def get_ordering_output(bert_config, input_tensor, labels):
+  """Get loss for ordering task, with labels.shape[1] sentences in each group"""
+  num_labels = labels.shape[1]
+  with tf.variable_scope("cls/ordering"):
+    output_weights = tf.get_variable(
+      "output_weights",
+      shape=[num_labels, bert_config.hidden_size],
+      initializer=modeling.create_initializer(bert_config.initializer_range))
+    output_bias = tf.get_variable(
+      "output_bias", shape=[num_labels], initializer=tf.zeros_initializer())
+
+    logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
+    logits = tf.nn.bias_add(logits, output_bias)
+    per_example_loss = 0.0
+    for i in range(num_labels-1):
+      for j in range(i+1, num_labels):
+        per_example_loss += - (logits[:, i] - logits[:, j]) * tf.math.sign(labels[:, i] - labels[:, j])
+    loss = tf.reduce_mean(per_example_loss)
+    return (loss, per_example_loss)
 
 def gather_indexes(sequence_tensor, positions):
   """Gathers the vectors at the specific positions over a minibatch."""
@@ -325,7 +320,7 @@ def input_fn_builder(input_files,
                      max_seq_length,
                      max_predictions_per_seq,
                      is_training,
-                     num_cpu_threads=4):
+                     num_cpu_threads=4, num_ordering):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   def input_fn(params):
@@ -347,6 +342,8 @@ def input_fn_builder(input_files,
             tf.FixedLenFeature([max_predictions_per_seq], tf.float32),
         "next_sentence_labels":
             tf.FixedLenFeature([1], tf.int64),
+        "ordering_labels":
+            tf.FixedLenFeature([num_ordering], tf.int64),
     }
 
     # For training, we want a lot of parallel reading and shuffling.

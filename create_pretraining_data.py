@@ -65,24 +65,25 @@ flags.DEFINE_float(
 class TrainingInstance(object):
   """A single training instance (sentence pair)."""
 
-  def __init__(self, tokens, segment_ids, masked_lm_positions, masked_lm_labels,
-               is_random_next):
+  def __init__(self, tokens, segment_ids, ordering_labels):
     self.tokens = tokens
     self.segment_ids = segment_ids
-    self.is_random_next = is_random_next
-    self.masked_lm_positions = masked_lm_positions
-    self.masked_lm_labels = masked_lm_labels
+    self.ordering_labels = ordering_labels
+    # self.is_random_next = is_random_next
+    # self.masked_lm_positions = masked_lm_positions
+    # self.masked_lm_labels = masked_lm_labels
 
   def __str__(self):
     s = ""
     s += "tokens: %s\n" % (" ".join(
         [tokenization.printable_text(x) for x in self.tokens]))
     s += "segment_ids: %s\n" % (" ".join([str(x) for x in self.segment_ids]))
-    s += "is_random_next: %s\n" % self.is_random_next
-    s += "masked_lm_positions: %s\n" % (" ".join(
-        [str(x) for x in self.masked_lm_positions]))
-    s += "masked_lm_labels: %s\n" % (" ".join(
-        [tokenization.printable_text(x) for x in self.masked_lm_labels]))
+    s += "ordering_labels: %s\n" % (" ".join([str(x) for x in self.ordering_labels]))
+    # s += "is_random_next: %s\n" % self.is_random_next
+    # s += "masked_lm_positions: %s\n" % (" ".join(
+    #     [str(x) for x in self.masked_lm_positions]))
+    # s += "masked_lm_labels: %s\n" % (" ".join(
+    #     [tokenization.printable_text(x) for x in self.masked_lm_labels]))
     s += "\n"
     return s
 
@@ -102,6 +103,7 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
   total_written = 0
   for (inst_index, instance) in enumerate(instances):
     input_ids = tokenizer.convert_tokens_to_ids(instance.tokens)
+    ordering_labels = instance.ordering_labels
     input_mask = [1] * len(input_ids)
     segment_ids = list(instance.segment_ids)
     assert len(input_ids) <= max_seq_length
@@ -115,25 +117,11 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
     assert len(input_mask) == max_seq_length
     assert len(segment_ids) == max_seq_length
 
-    masked_lm_positions = list(instance.masked_lm_positions)
-    masked_lm_ids = tokenizer.convert_tokens_to_ids(instance.masked_lm_labels)
-    masked_lm_weights = [1.0] * len(masked_lm_ids)
-
-    while len(masked_lm_positions) < max_predictions_per_seq:
-      masked_lm_positions.append(0)
-      masked_lm_ids.append(0)
-      masked_lm_weights.append(0.0)
-
-    next_sentence_label = 1 if instance.is_random_next else 0
-
     features = collections.OrderedDict()
     features["input_ids"] = create_int_feature(input_ids)
     features["input_mask"] = create_int_feature(input_mask)
     features["segment_ids"] = create_int_feature(segment_ids)
-    features["masked_lm_positions"] = create_int_feature(masked_lm_positions)
-    features["masked_lm_ids"] = create_int_feature(masked_lm_ids)
-    features["masked_lm_weights"] = create_float_feature(masked_lm_weights)
-    features["next_sentence_labels"] = create_int_feature([next_sentence_label])
+    features["ordering_labels"] = create_int_feature(ordering_labels)
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
 
@@ -171,7 +159,6 @@ def create_int_feature(values):
 def create_float_feature(values):
   feature = tf.train.Feature(float_list=tf.train.FloatList(value=list(values)))
   return feature
-
 
 def create_training_instances(input_files, tokenizer, max_seq_length,
                               dupe_factor, short_seq_prob, masked_lm_prob,
@@ -215,6 +202,57 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
 
   rng.shuffle(instances)
   return instances
+
+def create_training_instances_forOrdering(input_file, label_file, tokenizer, max_seq_length, rng):
+	all_examples = [[]]
+	all_labels = [[]]
+	with open(input_file, "r") as reader1, open(label_file, "r") as reader2:
+      while True:
+        line = tokenization.convert_to_unicode(reader1.readline())
+        label = reader2.readline()
+        if not line:
+          break
+        line = line.strip()
+        label = label.strip()
+
+        # Empty lines are used as document delimiters
+        if not line:
+          all_examples.append([])
+          all_labels.append([])
+        tokens = tokenizer.tokenize(line)
+        label = int(label)
+        if tokens:
+          all_documents[-1].append(tokens)
+          all_labels[-1].append(label)
+
+    instances = []
+
+    for idx, example in enumerate(all_examples):
+    	num_tokens = 0
+    	tokens = []
+    	segment_ids = []
+    	ordering_labels = all_labels[idx] 
+    
+    	tokens.append("[CLS]")
+    	segment_ids.append(0)
+    	for segment_id, line in enumerate(example):
+    		for token in line:
+    			tokens.append(token)
+    			segment_ids.append(segment_id)
+    			num_tokens += 1
+    		tokens.append("[SEP]")
+    		segment_ids.append(segment_id)
+
+    	if num_tokens > max_seq_length:
+    		continue #skip the example if it's too large
+
+		instance = TrainingInstance(
+            tokens=tokens,
+            segment_ids=segment_ids,
+            ordering_labels=ordering_labels)
+        instances.append(instance)
+
+    return instances
 
 
 def create_instances_from_document(
@@ -420,10 +458,13 @@ def main(_):
     tf.logging.info("  %s", input_file)
 
   rng = random.Random(FLAGS.random_seed)
-  instances = create_training_instances(
-      input_files, tokenizer, FLAGS.max_seq_length, FLAGS.dupe_factor,
-      FLAGS.short_seq_prob, FLAGS.masked_lm_prob, FLAGS.max_predictions_per_seq,
-      rng)
+  # instances = create_training_instances(
+  #     input_files, tokenizer, FLAGS.max_seq_length, FLAGS.dupe_factor,
+  #     FLAGS.short_seq_prob, FLAGS.masked_lm_prob, FLAGS.max_predictions_per_seq,
+  #     rng)
+
+  #below function only uses 1 input file
+  instances = create_training_instances_forOrdering(input_files[0], tokenizer, max_seq_length, rng)
 
   output_files = FLAGS.output_file.split(",")
   tf.logging.info("*** Writing to output files ***")
