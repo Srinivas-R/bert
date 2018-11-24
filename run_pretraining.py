@@ -142,7 +142,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     #  next_sentence_log_probs) = get_next_sentence_output(
     #      bert_config, model.get_pooled_output(), next_sentence_labels)
     
-    (ordering_loss, ordering_example_loss) = get_ordering_output(
+    (ordering_loss, ordering_example_loss, preds) = get_ordering_output(
       bert_config, model.get_pooled_output(), ordering_labels)
 
 
@@ -185,20 +185,21 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           train_op=train_op,
           scaffold_fn=scaffold_fn)
     elif mode == tf.estimator.ModeKeys.EVAL:
-
-      def metric_fn(ordering_example_loss, ordering_loss, ordering_labels):
-        for example in ordering_labels:
+      def metric_fn(ordering_loss, logits, ordering_labels):
+        ordering_accuracy = 0.0
+        predicted_orderings = np.argsort(logits) + 1
+        for idx, example in enumerate(ordering_labels):
+          if np.all(example == predicted_orderings[idx]):
+            ordering_accuracy += 1.0
+        ordering_accuracy /= ordering_labels.shape[0]
           
-
         return {
             "ordering_accuracy": ordering_accuracy,
             "ordering_loss": ordering_loss,
         }
 
       eval_metrics = (metric_fn, [
-          masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
-          masked_lm_weights, next_sentence_example_loss,
-          next_sentence_log_probs, next_sentence_labels
+          ordering_loss, preds, ordering_labels
       ])
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -298,7 +299,7 @@ def get_ordering_output(bert_config, input_tensor, labels):
       for j in range(i+1, num_labels):
         per_example_loss += - (logits[:, i] - logits[:, j]) * tf.math.sign(labels[:, i] - labels[:, j])
     loss = tf.reduce_mean(per_example_loss)
-    return (loss, per_example_loss)
+    return (loss, per_example_loss, logits)
 
 def gather_indexes(sequence_tensor, positions):
   """Gathers the vectors at the specific positions over a minibatch."""
