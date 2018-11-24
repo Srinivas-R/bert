@@ -564,25 +564,90 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   seq_length = final_hidden_shape[1]
   hidden_size = final_hidden_shape[2]
 
-  output_weights = tf.get_variable(
-      "cls/squad/output_weights", [2, hidden_size],
-      initializer=tf.truncated_normal_initializer(stddev=0.02))
+  # output_weights = tf.get_variable(
+  #     "cls/squad/output_weights", [2, hidden_size],
+  #     initializer=tf.truncated_normal_initializer(stddev=0.02))
 
-  output_bias = tf.get_variable(
-      "cls/squad/output_bias", [2], initializer=tf.zeros_initializer())
+  # output_bias = tf.get_variable(
+  #     "cls/squad/output_bias", [2], initializer=tf.zeros_initializer())
 
   final_hidden_matrix = tf.reshape(final_hidden,
                                    [batch_size * seq_length, hidden_size])
-  logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
-  logits = tf.nn.bias_add(logits, output_bias)
+  # logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
+  # logits = tf.nn.bias_add(logits, output_bias)
 
-  logits = tf.reshape(logits, [batch_size, seq_length, 2])
-  logits = tf.transpose(logits, [2, 0, 1])
+  # logits = tf.reshape(logits, [batch_size, seq_length, 2])
+  # logits = tf.transpose(logits, [2, 0, 1])
 
-  unstacked_logits = tf.unstack(logits, axis=0)
+  # unstacked_logits = tf.unstack(logits, axis=0)
 
-  (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
+  # (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
+  start_h1 = tf.layers.dense(inputs=final_hidden_matrix,
+                             units=hidden_size,
+                             activation=tf.nn.relu,
+                             use_bias=True,
+                             kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                             kernel_constraint=tf.keras.constraints.MaxNorm(3.0, axis=0),
+                             reuse=tf.AUTO_REUSE,
+                             name='start_hidden_1'
+                             )
+  end_h1 = tf.layers.dense(inputs=final_hidden_matrix,
+                             units=hidden_size,
+                             activation=tf.nn.relu,
+                             use_bias=True,
+                             kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                             kernel_constraint=tf.keras.constraints.MaxNorm(3.0, axis=0),
+                             reuse=tf.AUTO_REUSE,
+                             name='end_hidden_1'
+                             )
 
+  start_d1 = tf.layers.dropout(start_h1, rate=0.5, training=is_training)
+  end_d1 = tf.layers.dropout(end_h1, rate=0.5, training=is_training)
+
+  start_h2 = tf.layers.dense(inputs=start_d1,
+                             units=hidden_size,
+                             activation=tf.nn.relu,
+                             use_bias=True,
+                             kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                             kernel_constraint=tf.keras.constraints.MaxNorm(3.0, axis=0),
+                             reuse=tf.AUTO_REUSE,
+                             name='start_hidden_2'
+                             )
+  end_h2 = tf.layers.dense(inputs=end_d1,
+                             units=hidden_size,
+                             activation=tf.nn.relu,
+                             use_bias=True,
+                             kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                             kernel_constraint=tf.keras.constraints.MaxNorm(3.0, axis=0),
+                             reuse=tf.AUTO_REUSE,
+                             name='end_hidden_2'
+                             )
+
+  start_d2 = tf.layers.dropout(start_h2, rate=0.5, training=is_training)
+  end_d2 = tf.layers.dropout(end_h2, rate=0.5, training=is_training)  
+
+  start_output = tf.layers.dense(inputs=start_d2,
+                             units=1,
+                             activation=None,
+                             use_bias=True,
+                             kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                             kernel_constraint=tf.keras.constraints.MaxNorm(3.0, axis=0),
+                             reuse=tf.AUTO_REUSE,
+                             name='start_output'
+                             )
+  end_output = tf.layers.dense(inputs=end_d2,
+                             units=1,
+                             activation=None,
+                             use_bias=True,
+                             kernel_initializer=tf.contrib.layers.xavier_initializer(),
+                             kernel_constraint=tf.keras.constraints.MaxNorm(3.0, axis=0),
+                             reuse=tf.AUTO_REUSE,
+                             name='end_output'
+                             )
+
+  start_logits = tf.reshape(start_output, [batch_size, seq_length])
+  end_logits = tf.reshape(end_output, [batch_size, seq_length])
+  
   return (start_logits, end_logits)
 
 
