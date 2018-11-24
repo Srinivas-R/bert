@@ -204,12 +204,14 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   return instances
 
 def create_training_instances_forOrdering(input_file, label_file, tokenizer, max_seq_length, rng):
-	all_examples = [[]]
-	all_labels = [[]]
-	with open(input_file, "r") as reader1, open(label_file, "r") as reader2:
+    all_examples = [[]]
+    all_labels = [[]]
+    k = 0
+    with open(input_file, "r") as reader1, open(label_file, "r") as reader2:
       while True:
         line = tokenization.convert_to_unicode(reader1.readline())
         label = reader2.readline()
+
         if not line:
           break
         line = line.strip()
@@ -220,33 +222,35 @@ def create_training_instances_forOrdering(input_file, label_file, tokenizer, max
           all_examples.append([])
           all_labels.append([])
         tokens = tokenizer.tokenize(line)
-        label = int(label)
         if tokens:
-          all_documents[-1].append(tokens)
+          label = int(label)
+          if label=='':
+            print(line, label)
+          all_examples[-1].append(tokens)
           all_labels[-1].append(label)
 
     instances = []
 
     for idx, example in enumerate(all_examples):
-    	num_tokens = 0
-    	tokens = []
-    	segment_ids = []
-    	ordering_labels = all_labels[idx] 
+        num_tokens = 0
+        tokens = []
+        segment_ids = []
+        ordering_labels = all_labels[idx] 
     
-    	tokens.append("[CLS]")
-    	segment_ids.append(0)
-    	for segment_id, line in enumerate(example):
-    		for token in line:
-    			tokens.append(token)
-    			segment_ids.append(segment_id)
-    			num_tokens += 1
-    		tokens.append("[SEP]")
-    		segment_ids.append(segment_id)
+        tokens.append("[CLS]")
+        segment_ids.append(0)
+        for segment_id, line in enumerate(example):
+            for token in line:
+                tokens.append(token)
+                segment_ids.append(segment_id)
+                num_tokens += 1
+            tokens.append("[SEP]")
+            segment_ids.append(segment_id)
 
-    	if num_tokens > max_seq_length:
-    		continue #skip the example if it's too large
+        if num_tokens > max_seq_length:
+            continue #skip the example if it's too large
 
-		instance = TrainingInstance(
+        instance = TrainingInstance(
             tokens=tokens,
             segment_ids=segment_ids,
             ordering_labels=ordering_labels)
@@ -464,7 +468,7 @@ def main(_):
   #     rng)
 
   #below function only uses 1 input file
-  instances = create_training_instances_forOrdering(input_files[0], tokenizer, max_seq_length, rng)
+  instances = create_training_instances_forOrdering(input_files[1], input_files[0], tokenizer, FLAGS.max_seq_length, rng)
 
   output_files = FLAGS.output_file.split(",")
   tf.logging.info("*** Writing to output files ***")
