@@ -185,7 +185,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           train_op=train_op,
           scaffold_fn=scaffold_fn)
     elif mode == tf.estimator.ModeKeys.EVAL:
-      def metric_fn(ordering_loss, logits, ordering_labels):
+      def metric_fn(ordering_example_loss, logits, ordering_labels):
         ordering_accuracy = 0.0
         num_sentences = ordering_labels.get_shape().as_list()[-1]
         _, indices = tf.nn.top_k(logits, k=num_sentences)
@@ -198,6 +198,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                         axis=1), 
                 1.0), 
             tf.float32))
+        ordering_loss = tf.metrics.mean(ordering_example_loss)
           
         return {
             "ordering_accuracy": ordering_accuracy,
@@ -205,7 +206,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         }
 
       eval_metrics = (metric_fn, [
-          ordering_loss, preds, ordering_labels
+          ordering_example_loss, preds, ordering_labels
       ])
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
