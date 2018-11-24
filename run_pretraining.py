@@ -191,15 +191,13 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         _, indices = tf.nn.top_k(logits, k=num_sentences)
         inv = tf.map_fn(tf.invert_permutation, indices)
         predicted_orderings = num_sentences - inv
-        ordering_accuracy = tf.count_nonzero(tf.dtypes.cast(
+        ordering_accuracy = tf.metrics.mean(tf.dtypes.cast(
                 tf.math.equal(
                     tf.reduce_mean(
                         tf.dtypes.cast(tf.math.equal(predicted_orderings, ordering_labels), tf.float32), 
                         axis=1), 
                 1.0), 
             tf.float32))
-        
-        ordering_accuracy = ordering_accuracy / ordering_labels.get_shape().as_list()[0]
           
         return {
             "ordering_accuracy": ordering_accuracy,
