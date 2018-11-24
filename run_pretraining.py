@@ -187,11 +187,19 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     elif mode == tf.estimator.ModeKeys.EVAL:
       def metric_fn(ordering_loss, logits, ordering_labels):
         ordering_accuracy = 0.0
-        predicted_orderings = np.argsort(logits) + 1
-        for idx, example in enumerate(ordering_labels):
-          if np.all(example == predicted_orderings[idx]):
-            ordering_accuracy += 1.0
-        ordering_accuracy /= ordering_labels.shape[0]
+        num_sentences = ordering_labels.get_shape().as_list()[-1]
+        _, indices = tf.nn.top_k(logits, k=num_sentences)
+        inv = tf.map_fn(tf.invert_permutation, indices)
+        predicted_orderings = num_sentences - inv
+        ordering_accuracy = tf.count_nonzero(tf.dtypes.cast(
+                tf.math.equal(
+                    tf.reduce_mean(
+                        tf.dtypes.cast(tf.math.equal(predicted_orderings, ordering_labels), tf.float32), 
+                        axis=1), 
+                1.0), 
+            tf.float32))
+        
+        ordering_accuracy = ordering_accuracy / ordering_labels.get_shape().as_list()[0]
           
         return {
             "ordering_accuracy": ordering_accuracy,
@@ -297,7 +305,7 @@ def get_ordering_output(bert_config, input_tensor, labels):
     per_example_loss = 0.0
     for i in range(num_labels-1):
       for j in range(i+1, num_labels):
-        per_example_loss += - (logits[:, i] - logits[:, j]) * tf.math.sign(labels[:, i] - labels[:, j])
+        per_example_loss += - (logits[:, i] - logits[:, j]) * tf.to_float(tf.math.sign(labels[:, i] - labels[:, j]))
     loss = tf.reduce_mean(per_example_loss)
     return (loss, per_example_loss, logits)
 
@@ -321,7 +329,7 @@ def input_fn_builder(input_files,
                      max_seq_length,
                      max_predictions_per_seq,
                      is_training,
-                     num_cpu_threads=4, num_ordering):
+                     num_cpu_threads=4, num_ordering=4):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   def input_fn(params):
@@ -460,7 +468,7 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=True)
+        is_training=True, num_ordering=4)
     estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
 
   if FLAGS.do_eval:

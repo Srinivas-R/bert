@@ -468,7 +468,7 @@ def main(_):
   #     rng)
 
   #below function only uses 1 input file
-  instances = create_training_instances_forOrdering(input_files[1], input_files[0], tokenizer, FLAGS.max_seq_length, rng)
+  instances = create_training_instances_forOrdering(input_files[0], input_files[1], tokenizer, FLAGS.max_seq_length, rng)
 
   output_files = FLAGS.output_file.split(",")
   tf.logging.info("*** Writing to output files ***")
