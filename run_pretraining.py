@@ -342,14 +342,6 @@ def input_fn_builder(input_files,
             tf.FixedLenFeature([max_seq_length], tf.int64),
         "segment_ids":
             tf.FixedLenFeature([max_seq_length], tf.int64),
-        "masked_lm_positions":
-            tf.FixedLenFeature([max_predictions_per_seq], tf.int64),
-        "masked_lm_ids":
-            tf.FixedLenFeature([max_predictions_per_seq], tf.int64),
-        "masked_lm_weights":
-            tf.FixedLenFeature([max_predictions_per_seq], tf.float32),
-        "next_sentence_labels":
-            tf.FixedLenFeature([1], tf.int64),
         "ordering_labels":
             tf.FixedLenFeature([num_ordering], tf.int64),
     }
