@@ -98,6 +98,7 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
   for output_file in output_files:
     writers.append(tf.python_io.TFRecordWriter(output_file))
 
+  print('NUMBER OF INSTANCES: {}'.format(len(instances)))
   writer_index = 0
 
   total_written = 0
@@ -224,12 +225,13 @@ def create_training_instances_forOrdering(input_file, label_file, tokenizer, max
         tokens = tokenizer.tokenize(line)
         if tokens:
           label = int(label)
-          if label=='':
-            print(line, label)
           all_examples[-1].append(tokens)
           all_labels[-1].append(label)
+    all_examples = [x for x in all_examples if x]
+    all_labels = [x for x in all_labels if x]
 
     instances = []
+    print("ALL EXAMPLES : {}".format(len(all_examples)))
 
     for idx, example in enumerate(all_examples):
         num_tokens = 0

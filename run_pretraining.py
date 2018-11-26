@@ -290,7 +290,7 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
 
 def get_ordering_output(bert_config, input_tensor, labels):
   """Get loss for ordering task, with labels.shape[1] sentences in each group"""
-  num_labels = labels.shape[1]
+  num_labels = labels.get_shape().as_list()[1]
   with tf.variable_scope("cls/ordering"):
     output_weights = tf.get_variable(
       "output_weights",
@@ -363,9 +363,11 @@ def input_fn_builder(input_files,
               tf.data.TFRecordDataset,
               sloppy=is_training,
               cycle_length=cycle_length))
+      d = d.apply(tf.contrib.data.ignore_errors())
       d = d.shuffle(buffer_size=100)
     else:
       d = tf.data.TFRecordDataset(input_files)
+      d = d.apply(tf.contrib.data.ignore_errors())
       # Since we evaluate for a fixed number of steps we don't want to encounter
       # out-of-range exceptions.
       d = d.repeat()
@@ -380,6 +382,7 @@ def input_fn_builder(input_files,
             batch_size=batch_size,
             num_parallel_batches=num_cpu_threads,
             drop_remainder=True))
+    d = d.apply(tf.contrib.data.ignore_errors())
     return d
 
   return input_fn
