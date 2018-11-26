@@ -327,8 +327,9 @@ def gather_indexes(sequence_tensor, positions):
 def input_fn_builder(input_files,
                      max_seq_length,
                      max_predictions_per_seq,
-                     is_training,
-                     num_cpu_threads=4, num_ordering=4):
+                     is_training, 
+                     num_ordering,
+                     num_cpu_threads=4):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   def input_fn(params):
@@ -462,7 +463,7 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=True, num_ordering=4)
+        is_training=True, num_ordering=3)
     estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
 
   if FLAGS.do_eval:
@@ -473,7 +474,7 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=False)
+        is_training=False, num_ordering=3)
 
     result = estimator.evaluate(
         input_fn=eval_input_fn, steps=FLAGS.max_eval_steps)
