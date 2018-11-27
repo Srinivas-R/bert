@@ -121,7 +121,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     input_ids = features["input_ids"]
     input_mask = features["input_mask"]
     segment_ids = features["segment_ids"]
-    ordering_labels = features["ordering_labels"]
+    is_shuffled_labels = features["is_shuffled"]
+    #ordering_labels = features["ordering_labels"]
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
@@ -142,12 +143,15 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     #  next_sentence_log_probs) = get_next_sentence_output(
     #      bert_config, model.get_pooled_output(), next_sentence_labels)
     
-    (ordering_loss, ordering_example_loss, preds) = get_ordering_output(
-      bert_config, model.get_pooled_output(), ordering_labels)
+    # (ordering_loss, ordering_example_loss, preds) = get_ordering_output(
+    #   bert_config, model.get_pooled_output(), ordering_labels)
+
+	(is_shuffled_loss, is_shuffled_example_loss, is_shuffled_log_probs) = get_is_shuffled_output(
+      bert_config, model.get_pooled_output(), is_shuffled_labels)
 
 
     # total_loss = masked_lm_loss + next_sentence_loss + ordering_loss
-    total_loss = ordering_loss
+    total_loss = is_shuffled_loss
 
     tvars = tf.trainable_variables()
 
@@ -185,28 +189,24 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           train_op=train_op,
           scaffold_fn=scaffold_fn)
     elif mode == tf.estimator.ModeKeys.EVAL:
-      def metric_fn(ordering_example_loss, logits, ordering_labels):
-        ordering_accuracy = 0.0
-        num_sentences = ordering_labels.get_shape().as_list()[-1]
-        _, indices = tf.nn.top_k(logits, k=num_sentences)
-        inv = tf.map_fn(tf.invert_permutation, indices)
-        predicted_orderings = num_sentences - inv
-        ordering_accuracy = tf.metrics.mean(tf.dtypes.cast(
-                tf.math.equal(
-                    tf.reduce_mean(
-                        tf.dtypes.cast(tf.math.equal(predicted_orderings, ordering_labels), tf.float32), 
-                        axis=1), 
-                1.0), 
-            tf.float32))
-        ordering_loss = tf.metrics.mean(ordering_example_loss)
-          
-        return {
-            "ordering_accuracy": ordering_accuracy,
-            "ordering_loss": ordering_loss,
+      def metric_fn(is_shuffled_example_loss,
+                    is_shuffled_log_probs, is_shuffled_labels):
+        is_shuffled_log_probs = tf.reshape(
+            is_shuffled_log_probs, [-1, is_shuffled_log_probs.shape[-1]])
+        is_shuffled_predictions = tf.argmax(
+            is_shuffled_log_probs, axis=-1, output_type=tf.int32)
+        is_shuffled_labels = tf.reshape(is_shuffled_labels, [-1])
+        is_shuffled_accuracy = tf.metrics.accuracy(
+            labels=is_shuffled_labels, predictions=is_shuffled_predictions)
+        is_shuffled_mean_loss = tf.metrics.mean(
+            values=is_shuffled_example_loss)
+      	return {
+            "is_shuffled_accuracy": is_shuffled_accuracy,
+            "is_shuffled_loss": is_shuffled_mean_loss,
         }
 
       eval_metrics = (metric_fn, [
-          ordering_example_loss, preds, ordering_labels
+          is_shuffled_example_loss, is_shuffled_log_probs, is_shuffled_labels
       ])
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -288,6 +288,28 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
     loss = tf.reduce_mean(per_example_loss)
     return (loss, per_example_loss, log_probs)
 
+def get_is_shuffled_output(bert_config, input_tensor, labels):
+  """Get loss and log probs for the is_shuffled prediction."""
+
+  # Simple binary classification. Note that 0 is correct order and 1 is
+  # shuffled sentences. This weight matrix is not used after pre-training.
+  with tf.variable_scope("cls/seq_relationship/shuffled"):
+    output_weights = tf.get_variable(
+        "output_weights",
+        shape=[2, bert_config.hidden_size],
+        initializer=modeling.create_initializer(bert_config.initializer_range))
+    output_bias = tf.get_variable(
+        "output_bias", shape=[2], initializer=tf.zeros_initializer())
+
+    logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
+    logits = tf.nn.bias_add(logits, output_bias)
+    log_probs = tf.nn.log_softmax(logits, axis=-1)
+    labels = tf.reshape(labels, [-1])
+    one_hot_labels = tf.one_hot(labels, depth=2, dtype=tf.float32)
+    per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
+    loss = tf.reduce_mean(per_example_loss)
+    return (loss, per_example_loss, log_probs)
+
 def get_ordering_output(bert_config, input_tensor, labels):
   """Get loss for ordering task, with labels.shape[1] sentences in each group"""
   num_labels = labels.get_shape().as_list()[1]
@@ -327,8 +349,7 @@ def gather_indexes(sequence_tensor, positions):
 def input_fn_builder(input_files,
                      max_seq_length,
                      max_predictions_per_seq,
-                     is_training, 
-                     num_ordering,
+                     is_training,
                      num_cpu_threads=4):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
@@ -343,8 +364,10 @@ def input_fn_builder(input_files,
             tf.FixedLenFeature([max_seq_length], tf.int64),
         "segment_ids":
             tf.FixedLenFeature([max_seq_length], tf.int64),
-        "ordering_labels":
-            tf.FixedLenFeature([num_ordering], tf.int64),
+        "is_shuffled":
+        	tf.FixedLenFeature([1], tf.int64)
+        # "ordering_labels":
+        #     tf.FixedLenFeature([num_ordering], tf.int64),
     }
 
     # For training, we want a lot of parallel reading and shuffling.
@@ -364,11 +387,11 @@ def input_fn_builder(input_files,
               tf.data.TFRecordDataset,
               sloppy=is_training,
               cycle_length=cycle_length))
-      d = d.apply(tf.contrib.data.ignore_errors())
+      #d = d.apply(tf.contrib.data.ignore_errors())
       d = d.shuffle(buffer_size=100)
     else:
       d = tf.data.TFRecordDataset(input_files)
-      d = d.apply(tf.contrib.data.ignore_errors())
+      #d = d.apply(tf.contrib.data.ignore_errors())
       # Since we evaluate for a fixed number of steps we don't want to encounter
       # out-of-range exceptions.
       d = d.repeat()
@@ -383,7 +406,7 @@ def input_fn_builder(input_files,
             batch_size=batch_size,
             num_parallel_batches=num_cpu_threads,
             drop_remainder=True))
-    d = d.apply(tf.contrib.data.ignore_errors())
+    #d = d.apply(tf.contrib.data.ignore_errors())
     return d
 
   return input_fn
@@ -463,7 +486,7 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=True, num_ordering=3)
+        is_training=True)
     estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
 
   if FLAGS.do_eval:
@@ -474,7 +497,7 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=False, num_ordering=3)
+        is_training=False)
 
     result = estimator.evaluate(
         input_fn=eval_input_fn, steps=FLAGS.max_eval_steps)

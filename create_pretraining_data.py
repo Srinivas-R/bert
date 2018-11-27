@@ -65,10 +65,11 @@ flags.DEFINE_float(
 class TrainingInstance(object):
   """A single training instance (sentence pair)."""
 
-  def __init__(self, tokens, segment_ids, ordering_labels):
+  def __init__(self, tokens, segment_ids, is_shuffled):
     self.tokens = tokens
     self.segment_ids = segment_ids
-    self.ordering_labels = ordering_labels
+    self.is_shuffled = is_shuffled
+    #self.ordering_labels = ordering_labels
     # self.is_random_next = is_random_next
     # self.masked_lm_positions = masked_lm_positions
     # self.masked_lm_labels = masked_lm_labels
@@ -78,7 +79,8 @@ class TrainingInstance(object):
     s += "tokens: %s\n" % (" ".join(
         [tokenization.printable_text(x) for x in self.tokens]))
     s += "segment_ids: %s\n" % (" ".join([str(x) for x in self.segment_ids]))
-    s += "ordering_labels: %s\n" % (" ".join([str(x) for x in self.ordering_labels]))
+    s += "is_shuffled: %s\n" % self.is_shuffled
+    # s += "ordering_labels: %s\n" % (" ".join([str(x) for x in self.ordering_labels]))
     # s += "is_random_next: %s\n" % self.is_random_next
     # s += "masked_lm_positions: %s\n" % (" ".join(
     #     [str(x) for x in self.masked_lm_positions]))
@@ -104,7 +106,8 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
   total_written = 0
   for (inst_index, instance) in enumerate(instances):
     input_ids = tokenizer.convert_tokens_to_ids(instance.tokens)
-    ordering_labels = instance.ordering_labels
+    #ordering_labels = instance.ordering_labels
+    is_shuffled = instance.is_shuffled
     input_mask = [1] * len(input_ids)
     segment_ids = list(instance.segment_ids)
     assert len(input_ids) <= max_seq_length
@@ -122,7 +125,8 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
     features["input_ids"] = create_int_feature(input_ids)
     features["input_mask"] = create_int_feature(input_mask)
     features["segment_ids"] = create_int_feature(segment_ids)
-    features["ordering_labels"] = create_int_feature(ordering_labels)
+    features["is_shuffled"] = create_int_feature([is_shuffled])
+    #features["ordering_labels"] = create_int_feature(ordering_labels)
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
 
@@ -204,44 +208,66 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   rng.shuffle(instances)
   return instances
 
-def create_training_instances_forOrdering(input_file, label_file, tokenizer, max_seq_length, rng):
-    all_examples = [[]]
-    all_labels = [[]]
-    k = 0
-    with open(input_file, "r") as reader1, open(label_file, "r") as reader2:
-      while True:
-        line = tokenization.convert_to_unicode(reader1.readline())
-        label = reader2.readline()
+def create_training_instances_isShuffled(input_file, tokenizer, max_seq_length, rng, neg_samples=1):
+  all_examples = [[]]
+  with open(input_file, "r") as reader1:
+    while True:
+      line = tokenization.convert_to_unicode(reader1.readline())
+      if not line:
+        break
+      line = line.strip()
 
-        if not line:
-          break
-        line = line.strip()
-        label = label.strip()
+      # Empty lines are used as document delimiters
+      if not line:
+        all_examples.append([])
+      tokens = tokenizer.tokenize(line)
+      if tokens:
+        all_examples[-1].append(tokens)
+  all_examples = [x for x in all_examples if x]
 
-        # Empty lines are used as document delimiters
-        if not line:
-          all_examples.append([])
-          all_labels.append([])
-        tokens = tokenizer.tokenize(line)
-        if tokens:
-          label = int(label)
-          all_examples[-1].append(tokens)
-          all_labels[-1].append(label)
-    all_examples = [x for x in all_examples if x]
-    all_labels = [x for x in all_labels if x]
+  instances = []
+  for idx, example in enumerate(all_examples):
+      #positive sample
+      num_tokens = 0
+      tokens = []
+      segment_ids = []
+      is_shuffled = 0 
+  
+      tokens.append("[CLS]")
+      segment_ids.append(0)
+      for segment_id, line in enumerate(example):
+          for token in line:
+              tokens.append(token)
+              segment_ids.append(segment_id)
+              num_tokens += 1
+          tokens.append("[SEP]")
+          segment_ids.append(segment_id)
 
-    instances = []
-    print("ALL EXAMPLES : {}".format(len(all_examples)))
+      if num_tokens > max_seq_length:
+          continue #skip the example if it's too large
 
-    for idx, example in enumerate(all_examples):
+      instance = TrainingInstance(
+          tokens=tokens,
+          segment_ids=segment_ids,
+          is_shuffled=is_shuffled)
+      instances.append(instance)
+
+      #negative sampling
+      permuted = example.copy()
+      for i in range(neg_samples):
         num_tokens = 0
         tokens = []
         segment_ids = []
-        ordering_labels = all_labels[idx] 
-    
+        is_shuffled = 1 
+        
+        #in-place shuffle of sentences
+        random.shuffle(permuted)
+        while permuted == example:
+          random.shuffle(permuted)
+
         tokens.append("[CLS]")
         segment_ids.append(0)
-        for segment_id, line in enumerate(example):
+        for segment_id, line in enumerate(permuted):
             for token in line:
                 tokens.append(token)
                 segment_ids.append(segment_id)
@@ -255,10 +281,66 @@ def create_training_instances_forOrdering(input_file, label_file, tokenizer, max
         instance = TrainingInstance(
             tokens=tokens,
             segment_ids=segment_ids,
-            ordering_labels=ordering_labels)
+            is_shuffled=is_shuffled)
         instances.append(instance)
 
-    return instances
+  return instances  
+
+def create_training_instances_forOrdering(input_file, label_file, tokenizer, max_seq_length, rng):
+  all_examples = [[]]
+  all_labels = [[]]
+  k = 0
+  with open(input_file, "r") as reader1, open(label_file, "r") as reader2:
+    while True:
+      line = tokenization.convert_to_unicode(reader1.readline())
+      label = reader2.readline()
+
+      if not line:
+        break
+      line = line.strip()
+      label = label.strip()
+
+      # Empty lines are used as document delimiters
+      if not line:
+        all_examples.append([])
+        all_labels.append([])
+      tokens = tokenizer.tokenize(line)
+      if tokens:
+        label = int(label)
+        all_examples[-1].append(tokens)
+        all_labels[-1].append(label)
+  all_examples = [x for x in all_examples if x]
+  all_labels = [x for x in all_labels if x]
+
+  instances = []
+  print("ALL EXAMPLES : {}".format(len(all_examples)))
+
+  for idx, example in enumerate(all_examples):
+      num_tokens = 0
+      tokens = []
+      segment_ids = []
+      ordering_labels = all_labels[idx] 
+  
+      tokens.append("[CLS]")
+      segment_ids.append(0)
+      for segment_id, line in enumerate(example):
+          for token in line:
+              tokens.append(token)
+              segment_ids.append(segment_id)
+              num_tokens += 1
+          tokens.append("[SEP]")
+          segment_ids.append(segment_id)
+
+      if num_tokens > max_seq_length:
+          continue #skip the example if it's too large
+
+      instance = TrainingInstance(
+          tokens=tokens,
+          segment_ids=segment_ids,
+          ordering_labels=ordering_labels)
+      instances.append(instance)
+
+  return instances
 
 
 def create_instances_from_document(
@@ -470,8 +552,8 @@ def main(_):
   #     rng)
 
   #below function only uses 1 input file
-  instances = create_training_instances_forOrdering(input_files[0], input_files[1], tokenizer, FLAGS.max_seq_length, rng)
-
+  # instances = create_training_instances_forOrdering(input_files[0], input_files[1], tokenizer, FLAGS.max_seq_length, rng)
+  instances = create_training_instances_isShuffled(input_files[0], tokenizer, FLAGS.max_seq_length, rng, neg_samples=3)
   output_files = FLAGS.output_file.split(",")
   tf.logging.info("*** Writing to output files ***")
   for output_file in output_files:
