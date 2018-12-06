@@ -287,7 +287,7 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
 
   # Simple binary classification. Note that 0 is "next sentence" and 1 is
   # "random sentence". This weight matrix is not used after pre-training.
-  with tf.variable_scope("cls/seq_relationship"):
+  with tf.variable_scope("cls/seq_relationship_new"):
     output_weights = tf.get_variable(
         "output_weights",
         shape=[3, bert_config.hidden_size],
