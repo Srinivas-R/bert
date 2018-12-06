@@ -119,6 +119,8 @@ dmypy.json
 data
 models
 output*
+pretraining_output
 
 #useless stuff
 archive
+
